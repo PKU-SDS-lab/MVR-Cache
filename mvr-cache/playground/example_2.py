@@ -1,0 +1,79 @@
+import time
+from pathlib import Path
+
+import pandas as pd
+from tqdm import tqdm
+
+from vcache import (
+    HNSWLibVectorDB,
+    InMemoryEmbeddingMetadataStorage,
+    LLMComparisonSimilarityEvaluator,
+    MRUEvictionPolicy,
+    SiliconFlowEmbeddingEngine,
+    SiliconFlowInferenceEngine,
+    VCache,
+    VCacheConfig,
+    VCachePolicy,
+    VerifiedDecisionPolicy,
+)
+
+"""
+    Run 
+       export DASHSCOPE_API_KEY="<your-api-key>"
+    before running the script with
+       poetry run python example_2.py
+"""
+
+
+def __get_vcache() -> VCache:
+    print("Initializing vCache configuration...")
+
+    # 1. Configure the components for vCache
+    config: VCacheConfig = VCacheConfig(
+        inference_engine=SiliconFlowInferenceEngine(),
+        embedding_engine=SiliconFlowEmbeddingEngine(),
+        vector_db=HNSWLibVectorDB(),
+        embedding_metadata_storage=InMemoryEmbeddingMetadataStorage(),
+        similarity_evaluator=LLMComparisonSimilarityEvaluator(
+            inference_engine=SiliconFlowInferenceEngine(temperature=0.0)
+        ),
+        eviction_policy=MRUEvictionPolicy(max_size=4096),
+    )
+
+    # 2. Choose a caching policy
+    policy: VCachePolicy = VerifiedDecisionPolicy(delta=0.03)
+
+    # 3. Initialize vCache with the configuration and policy
+    vcache: VCache = VCache(config, policy)
+    print("vCache initialized successfully.\n")
+
+    return vcache
+
+
+def main():
+    vcache: VCache = __get_vcache()
+
+    print("Loading sample data from parquet file...")
+    script_dir: Path = Path(__file__).parent
+    df: pd.DataFrame = pd.read_parquet(script_dir / "sample_data.parquet")
+    print(f"Loaded {len(df)} rows of data\n")
+    print("Processing data with vCache...")
+
+    for i, row in tqdm(
+        df.iterrows(), total=len(df), desc="Processing rows", disable=True
+    ):
+        prompt: str = row["text"]
+        system_prompt: str = row["task"]
+
+        start_time: float = time.time()
+        is_hit, response, _, _ = vcache.infer_with_cache_info(prompt, system_prompt)
+        end_time: float = time.time()
+        print(
+            f"Response for request {i}: {response}. Is hit: {is_hit}. Time taken: {(end_time - start_time):.3f} seconds"
+        )
+
+    print("Data processing completed.")
+
+
+if __name__ == "__main__":
+    main()
